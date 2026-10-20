@@ -1,39 +1,23 @@
 """
 Fase 3 - Modelo de Machine Learning (CNN 1D) para prever recompra.
-
-Executa três passos fundamentais:
-1. Normalização (MinMaxScaler) das variáveis R, F e M para o intervalo [0, 1].
-2. Formatação 3D (samples, steps, variables) para a Conv1D.
-3. Construção da CNN (Conv1D + Dense sigmoid) para prever a probabilidade
-   de recompra nos DIAS_IGNORADOS dias futuros.
-
-Deve ser executado APÓS adicionar_compra_futura.py, pois depende da coluna
-binária 'Comprou_{DIAS_IGNORADOS}d' presente no rfm.xlsx.
+Versão Definitiva: Otimização de limiar, baseline justo e EarlyStopping refinado.
 
 Boas práticas aplicadas:
 - Transformação log1p no Monetary antes da normalização, para reduzir o
-  efeito de outliers (ex.: clientes atacadistas) que comprimiriam a base
-  para perto de 0 no MinMaxScaler.
-- Split 60/20/20 (treino/validação/teste) ANTES da normalização, para
-  evitar data leakage: o MinMaxScaler é ajustado apenas no treino.
-- EarlyStopping monitoriza a validação independente; o teste só é
-  avaliado no final.
-- Formato (amostras, 3, 1) com kernel_size=2: a convolução desliza
-  sobre R -> F -> M, justificando o uso de uma CNN.
-- Métricas académicas (ROC-AUC, AP, Precision, Recall, F1) via
-  classification_report e roc_auc_score/average_precision_score.
-- Baselines (Random Forest e Regressão Logística) treinados em paralelo
-  como "termómetros" para comparação na tabela de resultados do artigo.
+  efeito de outliers (ex.: clientes atacadistas).
+- Split 60/20/20 (treino/validação/teste) ANTES da normalização.
+- EarlyStopping monitoriza a validação independente com min_delta;
+  o teste só é avaliado no final.
 - Limiar de decisão otimizado na validação (maximiza F1) para TODOS os
   modelos (CNN, RF e LogReg), garantindo comparação justa.
-- Semente de aleatoriedade travada (tf.keras.utils.set_random_seed) para
-  reprodutibilidade dos resultados publicados.
+- Semente de aleatoriedade travada para favorecer a reprodutibilidade.
 
-Nota sobre o log1p no Monetary (teste A/B sugerido pelo avaliador):
-- Execute uma vez com a linha `df["Monetary"] = np.log1p(df["Monetary"])`
-  ativa, anote o ROC-AUC.
-- Comente essa linha, execute novamente e compare. A versão com melhor
-  ROC-AUC é a que deve ir para o artigo.
+Nota sobre o log1p no Monetary:
+- Compare as versões com e sem log1p usando o mesmo split.
+- Escolha a transformação com base no desempenho na validação,
+  considerando ROC-AUC e AP.
+- Depois de selecionar a configuração, avalie-a no conjunto
+  de teste reservado, sem usá-lo para novas decisões.
 """
 
 from __future__ import annotations
@@ -68,6 +52,21 @@ COLUNAS_RFM = ["Recency", "Frequency", "Monetary"]
 COL_ALVO = f"Comprou_{DIAS_IGNORADOS}d"
 
 
+def imprimir_metricas_validacao(
+    nome: str,
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+) -> None:
+    """Exibe métricas de discriminação no conjunto de validação."""
+    roc_auc = roc_auc_score(y_true, y_prob)
+    ap = average_precision_score(y_true, y_prob)
+
+    print(
+        f"{nome} — Validação | "
+        f"ROC-AUC: {roc_auc:.4f} | AP: {ap:.4f}"
+    )
+
+
 def carregar_dados(caminho: str | Path) -> tuple[np.ndarray, np.ndarray]:
     """
     Lê o rfm.xlsx e devolve (X, y) como arrays NumPy.
@@ -86,7 +85,7 @@ def carregar_dados(caminho: str | Path) -> tuple[np.ndarray, np.ndarray]:
         )
 
     # Transformação logarítmica no Monetary (reduz o peso de outliers)
-    # df["Monetary"] = np.log1p(df["Monetary"])
+    df["Monetary"] = np.log1p(df["Monetary"])
 
     X = df[COLUNAS_RFM].to_numpy(dtype=float)
     y = df[COL_ALVO].to_numpy(dtype=int)
@@ -221,6 +220,9 @@ def treinar_baselines(
     rf = RandomForestClassifier(n_estimators=200, random_state=42)
     rf.fit(X_train, y_train)
     rf_val_prob = rf.predict_proba(X_val)[:, 1]
+    imprimir_metricas_validacao(
+        "Random Forest", y_val, rf_val_prob
+    )
     rf_limiar, rf_f1_val = otimizar_limiar(y_val, rf_val_prob)
     print(
         f"\nLimiar ótimo (validação) - Random Forest: {rf_limiar:.2f} "
@@ -232,6 +234,9 @@ def treinar_baselines(
     lr = LogisticRegression(max_iter=1000, random_state=42)
     lr.fit(X_train, y_train)
     lr_val_prob = lr.predict_proba(X_val)[:, 1]
+    imprimir_metricas_validacao(
+        "Regressão Logística", y_val, lr_val_prob
+    )
     lr_limiar, lr_f1_val = otimizar_limiar(y_val, lr_val_prob)
     print(
         f"\nLimiar ótimo (validação) - Regressão Logística: {lr_limiar:.2f} "
@@ -297,7 +302,7 @@ def main() -> None:
     modelo.summary()
 
     early = callbacks.EarlyStopping(
-        monitor="val_loss", patience=10, restore_best_weights=True
+        monitor="val_loss",min_delta=1e-4, patience=10, restore_best_weights=True
     )
 
     modelo.fit(
@@ -311,8 +316,17 @@ def main() -> None:
     )
 
     # Otimização do limiar na validação (maximiza F1)
-    y_val_prob = modelo.predict(X_val_3d, verbose=0).ravel()
-    limiar_otimo, f1_val = otimizar_limiar(y_val, y_val_prob)
+    y_val_prob = modelo.predict(
+        X_val_3d, verbose=0
+    ).ravel()
+
+    imprimir_metricas_validacao(
+        "CNN 1D", y_val, y_val_prob
+    )
+
+    limiar_otimo, f1_val = otimizar_limiar(
+        y_val, y_val_prob
+    )
     print(
         f"\nLimiar ótimo (validação) - CNN: {limiar_otimo:.2f} "
         f"(F1 validação = {f1_val:.4f})"
