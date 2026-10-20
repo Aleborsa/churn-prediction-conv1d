@@ -9,7 +9,7 @@ com uma linha por cliente, contendo:
     M — Monetary  : valor total gasto pelo cliente no período
 
 Premissas (ajustáveis nas constantes abaixo):
-    - Entrada em Excel (.xlsx)
+    - Entrada em Excel (.xlsx) já tratada: online_retail_II_limpo.xlsx
     - Colunas: CustomerID, InvoiceNo, InvoiceDate, TotalPrice
     - Data de referência = data máxima de InvoiceDate do dataset
     - Saída em Excel, uma aba "RFM"
@@ -26,7 +26,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Configuração
 # ---------------------------------------------------------------------------
-ARQUIVO_ENTRADA = "online_retail_II.xlsx"
+ARQUIVO_ENTRADA = "online_retail_II_limpo.xlsx"
 ARQUIVO_SAIDA = "rfm.xlsx"
 NOME_ABA_SAIDA = "RFM"
 
