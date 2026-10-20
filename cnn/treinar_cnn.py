@@ -64,7 +64,7 @@ def configurar_logging() -> logging.Logger:
     O nome do arquivo inclui um timestamp para não sobrescrever execuções
     anteriores. Devolve o logger pronto a usar.
     """
-    logs_dir = Path("logs")
+    logs_dir = Path("../logs")
     logs_dir.mkdir(exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -145,7 +145,7 @@ def carregar_dados(caminho: str | Path) -> tuple[np.ndarray, np.ndarray]:
         )
 
     # Transformação logarítmica no Monetary (reduz o peso de outliers)
-    df["Monetary"] = np.log1p(df["Monetary"])
+    # df["Monetary"] = np.log1p(df["Monetary"])
 
     X = df[COLUNAS_RFM].to_numpy(dtype=float)
     y = df[COL_ALVO].to_numpy(dtype=int)

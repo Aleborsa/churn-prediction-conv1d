@@ -187,9 +187,9 @@ def separar_por_aba(abas: dict) -> tuple:
             )
 
         # StockCode inválido: valor (após strip) presente na lista
-        col_stock = df[COLUNA_STOCK_CODE]
-        mascara_stock_code = col_stock.astype(str).str.strip().isin(
-            STOCK_CODES_INVALIDOS
+        col_stock = df[COLUNA_STOCK_CODE].fillna("")
+        mascara_stock_code = col_stock.astype(str).str.strip().str.upper().isin(
+            {c.upper() for c in STOCK_CODES_INVALIDOS}
         )
 
         # Máscara combinada: inválida se atender QUALQUER critério
