@@ -1,14 +1,16 @@
 """
-Remove linhas com preço inválido (<= 0.01), quantidade inválida (<= 0)
-ou Customer ID vazio de um arquivo Excel com múltiplas abas (anos
-diferentes, mesmas colunas) e gera um novo Excel mantendo as abas
-separadas por ano.
+Remove linhas com preço inválido (<= 0.01), quantidade inválida (<= 0),
+Customer ID vazio ou StockCode em uma lista de códigos inválidos de um
+arquivo Excel com múltiplas abas (anos diferentes, mesmas colunas) e
+gera um novo Excel mantendo as abas separadas por ano.
 
 Para cada aba de origem, são geradas 2 abas de saída:
     - "limpas_<aba>":    apenas as linhas válidas
-                         (Price > 0.01 E Quantity > 0 E Customer ID preenchido)
+                         (Price > 0.01 E Quantity > 0 E Customer ID preenchido
+                          E StockCode fora da lista de inválidos)
     - "removidas_<aba>": apenas as linhas descartadas
-                         (Price <= 0.01 OU Quantity <= 0 OU Customer ID vazio)
+                         (Price <= 0.01 OU Quantity <= 0 OU Customer ID vazio
+                          OU StockCode na lista de inválidos)
 
 Ex.: com 2 abas de entrada -> 4 abas de saída.
 
@@ -43,8 +45,40 @@ LIMITE_PRECO = 0.01             # remove linhas com preço <= este valor
 COLUNA_QUANTIDADE = "Quantity"  # nome da coluna de quantidade
 LIMITE_QUANTIDADE = 0           # remove linhas com quantidade <= este valor
 COLUNA_CUSTOMER_ID = "Customer ID"  # nome da coluna de cliente
+COLUNA_STOCK_CODE = "StockCode"     # nome da coluna de código de estoque
 PREFIXO_REMOVIDAS = "removidas"
 PREFIXO_LIMPAS = "limpas"
+
+# StockCodes considerados inválidos (linhas com esses códigos são removidas).
+# Lista deduplicada a partir dos valores informados.
+STOCK_CODES_INVALIDOS = {
+    "POST",
+    "PADS",
+    "M",
+    "gift_0001_90",
+    "gift_0001_80",
+    "gift_0001_70",
+    "gift_0001_60",
+    "gift_0001_50",
+    "gift_0001_40",
+    "gift_0001_30",
+    "gift_0001_20",
+    "gift_0001_10",
+    "GIFT",
+    "DOT",
+    "D",
+    "CRUK",
+    "C3",
+    "C2",
+    "BANK CHARGES",
+    "B",
+    "AMAZONFEE",
+    "ADJUST2",
+    "ADJUST",
+    "TEST002",
+    "TEST001",
+    "S",
+}
 
 # Limite do Excel por aba
 MAX_LINHAS_EXCEL = 1_048_576
@@ -113,6 +147,7 @@ def separar_por_aba(abas: dict) -> tuple:
                     - total_por_preco
                     - total_por_quantidade
                     - total_por_customer_vazio
+                    - total_por_stock_code
                     - total_por_ambos
                     - total_limpas
 
@@ -120,6 +155,7 @@ def separar_por_aba(abas: dict) -> tuple:
         - Price <= LIMITE_PRECO
         - Quantity <= LIMITE_QUANTIDADE
         - Customer ID vazio (NaN/None ou string vazia)
+        - StockCode na lista STOCK_CODES_INVALIDOS
     """
     saidas = {}
 
@@ -128,6 +164,7 @@ def separar_por_aba(abas: dict) -> tuple:
     total_por_preco = 0
     total_por_quantidade = 0
     total_por_customer_vazio = 0
+    total_por_stock_code = 0
     total_por_ambos = 0
     total_limpas = 0
 
@@ -135,6 +172,7 @@ def separar_por_aba(abas: dict) -> tuple:
         _validar_coluna_numerica(df, COLUNA_PRECO, nome_aba)
         _validar_coluna_numerica(df, COLUNA_QUANTIDADE, nome_aba)
         _validar_coluna_existente(df, COLUNA_CUSTOMER_ID, nome_aba)
+        _validar_coluna_existente(df, COLUNA_STOCK_CODE, nome_aba)
 
         # Máscaras individuais (para log)
         mascara_preco = df[COLUNA_PRECO] <= LIMITE_PRECO
@@ -148,8 +186,19 @@ def separar_por_aba(abas: dict) -> tuple:
                 col_customer.astype(str).str.strip() == ""
             )
 
+        # StockCode inválido: valor (após strip) presente na lista
+        col_stock = df[COLUNA_STOCK_CODE]
+        mascara_stock_code = col_stock.astype(str).str.strip().isin(
+            STOCK_CODES_INVALIDOS
+        )
+
         # Máscara combinada: inválida se atender QUALQUER critério
-        mascara_invalida = mascara_preco | mascara_qtd | mascara_customer_vazio
+        mascara_invalida = (
+            mascara_preco
+            | mascara_qtd
+            | mascara_customer_vazio
+            | mascara_stock_code
+        )
 
         removidas = df[mascara_invalida].copy()
         limpas = df[~mascara_invalida].copy()
@@ -178,8 +227,14 @@ def separar_por_aba(abas: dict) -> tuple:
         qtd_preco = int(mascara_preco.sum())
         qtd_qtd = int(mascara_qtd.sum())
         qtd_customer_vazio = int(mascara_customer_vazio.sum())
+        qtd_stock_code = int(mascara_stock_code.sum())
         qtd_ambos = int(
-            (mascara_preco & mascara_qtd & mascara_customer_vazio).sum()
+            (
+                mascara_preco
+                & mascara_qtd
+                & mascara_customer_vazio
+                & mascara_stock_code
+            ).sum()
         )
 
         total_linhas += len(df)
@@ -187,6 +242,7 @@ def separar_por_aba(abas: dict) -> tuple:
         total_por_preco += qtd_preco
         total_por_quantidade += qtd_qtd
         total_por_customer_vazio += qtd_customer_vazio
+        total_por_stock_code += qtd_stock_code
         total_por_ambos += qtd_ambos
         total_limpas += len(limpas)
 
@@ -200,7 +256,8 @@ def separar_por_aba(abas: dict) -> tuple:
             f"preço<={LIMITE_PRECO}: {qtd_preco} | "
             f"qtd<={LIMITE_QUANTIDADE}: {qtd_qtd} | "
             f"customer vazio: {qtd_customer_vazio} | "
-            f"todos os 3: {qtd_ambos}"
+            f"stock code inválido: {qtd_stock_code} | "
+            f"todos os 4: {qtd_ambos}"
         )
 
     estatisticas = {
@@ -209,6 +266,7 @@ def separar_por_aba(abas: dict) -> tuple:
         "total_por_preco": total_por_preco,
         "total_por_quantidade": total_por_quantidade,
         "total_por_customer_vazio": total_por_customer_vazio,
+        "total_por_stock_code": total_por_stock_code,
         "total_por_ambos": total_por_ambos,
         "total_limpas": total_limpas,
     }
@@ -296,7 +354,11 @@ def main() -> None:
         f"(Customer ID vazio):     {estatisticas['total_por_customer_vazio']}"
     )
     print(
-        f"  - atenderam aos 3 critérios:       {estatisticas['total_por_ambos']}"
+        f"  - atenderam ao 4º critério "
+        f"(StockCode inválido):    {estatisticas['total_por_stock_code']}"
+    )
+    print(
+        f"  - atenderam aos 4 critérios:       {estatisticas['total_por_ambos']}"
     )
     print(f"Total de linhas limpas:             {estatisticas['total_limpas']}")
     print(f"Total de abas de saída:             {len(saidas)}")
