@@ -13,7 +13,9 @@ Premissas (ajustáveis nas constantes abaixo):
     - TODAS as abas do arquivo são lidas e concatenadas antes do cálculo
     - Colunas: Customer ID, Invoice, InvoiceDate, Quantity, Price
     - O valor de cada linha é calculado como Quantity * Price
-    - Data de referência = data máxima de InvoiceDate do dataset
+    - Os últimos DIAS_IGNORADOS dias (contados a partir da data mais recente
+      da base) são DESCONSIDERADOS no cálculo do RFM
+    - Data de referência = data máxima (após o corte) do dataset
     - Saída em Excel, uma aba "RFM"
 """
 
@@ -41,7 +43,10 @@ COL_PRECO = "Price"
 # Nome da coluna calculada internamente (Quantity * Price)
 COL_VALOR = "ValorTotal"
 
-# Se None, usa a data máxima do dataset como referência.
+# Quantos dias (a partir da data mais recente da base) devem ser ignorados.
+DIAS_IGNORADOS = 90
+
+# Se None, usa a data máxima do dataset (após o corte) como referência.
 # Caso contrário, informe uma string "YYYY-MM-DD".
 DATA_REFERENCIA: str | None = None
 
@@ -112,9 +117,27 @@ def carregar_vendas(caminho: str | Path) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Corte temporal (ignorar os últimos N dias)
+# ---------------------------------------------------------------------------
+def _data_corte(df: pd.DataFrame, dias_ignorados: int) -> pd.Timestamp:
+    """Retorna a data limite: data máxima da base menos `dias_ignorados`."""
+    return df[COL_DATA].max() - pd.Timedelta(days=dias_ignorados)
+
+
+def aplicar_corte_temporal(df: pd.DataFrame, dias_ignorados: int) -> tuple[pd.DataFrame, pd.Timestamp]:
+    """
+    Remove os registros dos últimos `dias_ignorados` dias e retorna
+    (dataframe_filtrado, data_de_corte).
+    """
+    corte = _data_corte(df, dias_ignorados)
+    df_filtrado = df[df[COL_DATA] <= corte].copy()
+    return df_filtrado, corte
+
+
+# ---------------------------------------------------------------------------
 # Cálculo do RFM
 # ---------------------------------------------------------------------------
-def calcular_rfm(df: pd.DataFrame, data_referencia: str | None = None) -> pd.DataFrame:
+def calcular_rfm(df: pd.DataFrame, data_referencia: str | pd.Timestamp | None = None) -> pd.DataFrame:
     if data_referencia is not None:
         ref = pd.Timestamp(data_referencia)
     else:
@@ -165,9 +188,25 @@ def main() -> None:
         print(f"[ERRO] {e}", file=sys.stderr)
         sys.exit(1)
 
-    rfm = calcular_rfm(df, DATA_REFERENCIA)
+    data_max = df[COL_DATA].max()
+
+    # Ignora os últimos DIAS_IGNORADOS dias da base
+    df, data_corte = aplicar_corte_temporal(df, DIAS_IGNORADOS)
+
+    if df.empty:
+        print(
+            f"[ERRO] Após ignorar os últimos {DIAS_IGNORADOS} dias "
+            f"(corte em {data_corte.date()}), não restaram registros.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # A referência de recência é a própria data de corte
+    rfm = calcular_rfm(df, data_referencia=DATA_REFERENCIA or data_corte)
     salvar_rfm(rfm, ARQUIVO_SAIDA, NOME_ABA_SAIDA)
 
+    print(f"Data máxima da base: {data_max.date()}")
+    print(f"Corte (ignorando {DIAS_IGNORADOS} dias): {data_corte.date()}")
     print(f"RFM gerado com {len(rfm)} clientes -> {ARQUIVO_SAIDA} (aba '{NOME_ABA_SAIDA}')")
 
 
