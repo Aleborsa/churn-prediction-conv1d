@@ -1,0 +1,148 @@
+"""
+Engenharia de atributos — RFM
+-----------------------------
+Transforma uma base de vendas (uma linha por item de fatura) em uma tabela
+com uma linha por cliente, contendo:
+
+    R — Recency   : dias desde a última compra (menor = melhor)
+    F — Frequency : nº de faturas distintas (InvoiceNo) do cliente
+    M — Monetary  : valor total gasto pelo cliente no período
+
+Premissas (ajustáveis nas constantes abaixo):
+    - Entrada em Excel (.xlsx)
+    - Colunas: CustomerID, InvoiceNo, InvoiceDate, TotalPrice
+    - Data de referência = data máxima de InvoiceDate do dataset
+    - Saída em Excel, uma aba "RFM"
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+
+# ---------------------------------------------------------------------------
+# Configuração
+# ---------------------------------------------------------------------------
+ARQUIVO_ENTRADA = "vendas.xlsx"
+ARQUIVO_SAIDA = "rfm.xlsx"
+NOME_ABA_SAIDA = "RFM"
+
+COL_CLIENTE = "CustomerID"
+COL_FATURA = "InvoiceNo"
+COL_DATA = "InvoiceDate"
+COL_VALOR = "TotalPrice"
+
+# Se None, usa a data máxima do dataset como referência.
+# Caso contrário, informe uma string "YYYY-MM-DD".
+DATA_REFERENCIA: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Validações
+# ---------------------------------------------------------------------------
+def _validar_colunas(df: pd.DataFrame, colunas: list[str]) -> None:
+    faltantes = [c for c in colunas if c not in df.columns]
+    if faltantes:
+        raise ValueError(
+            f"Colunas ausentes no arquivo de entrada: {faltantes}. "
+            f"Colunas disponíveis: {list(df.columns)}"
+        )
+
+
+def _validar_coluna_numerica(df: pd.DataFrame, nome_coluna: str) -> None:
+    if not pd.api.types.is_numeric_dtype(df[nome_coluna]):
+        raise TypeError(
+            f"A coluna '{nome_coluna}' deve ser numérica, "
+            f"mas veio como {df[nome_coluna].dtype}."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Leitura
+# ---------------------------------------------------------------------------
+def carregar_vendas(caminho: str | Path) -> pd.DataFrame:
+    caminho = Path(caminho)
+    if not caminho.exists():
+        raise FileNotFoundError(f"Arquivo não encontrado: {caminho}")
+
+    df = pd.read_excel(caminho)
+
+    _validar_colunas(df, [COL_CLIENTE, COL_FATURA, COL_DATA, COL_VALOR])
+    _validar_coluna_numerica(df, COL_VALOR)
+
+    # Normalizações básicas
+    df[COL_DATA] = pd.to_datetime(df[COL_DATA], errors="coerce")
+    df = df.dropna(subset=[COL_CLIENTE, COL_DATA])
+
+    # Remove devoluções / valores negativos e faturas canceladas (prefixo 'C')
+    df = df[~df[COL_FATURA].astype(str).str.startswith("C")]
+    df = df[df[COL_VALOR] > 0]
+
+    return df
+
+
+# ---------------------------------------------------------------------------
+# Cálculo do RFM
+# ---------------------------------------------------------------------------
+def calcular_rfm(df: pd.DataFrame, data_referencia: str | None = None) -> pd.DataFrame:
+    if data_referencia is not None:
+        ref = pd.Timestamp(data_referencia)
+    else:
+        ref = df[COL_DATA].max()
+
+    agrupado = df.groupby(COL_CLIENTE).agg(
+        ultima_compra=(COL_DATA, "max"),
+        frequency=(COL_FATURA, "nunique"),
+        monetary=(COL_VALOR, "sum"),
+    )
+
+    agrupado["recency"] = (ref - agrupado["ultima_compra"]).dt.days
+
+    rfm = (
+        agrupado[["recency", "frequency", "monetary"]]
+        .rename(
+            columns={
+                "recency": "Recency",
+                "frequency": "Frequency",
+                "monetary": "Monetary",
+            }
+        )
+        .reset_index()
+        .rename(columns={COL_CLIENTE: "CustomerID"})
+        .sort_values("Monetary", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    return rfm
+
+
+# ---------------------------------------------------------------------------
+# Escrita
+# ---------------------------------------------------------------------------
+def salvar_rfm(rfm: pd.DataFrame, caminho: str | Path, nome_aba: str) -> None:
+    caminho = Path(caminho)
+    with pd.ExcelWriter(caminho, engine="openpyxl") as writer:
+        rfm.to_excel(writer, sheet_name=nome_aba, index=False)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main() -> None:
+    try:
+        df = carregar_vendas(ARQUIVO_ENTRADA)
+    except (FileNotFoundError, ValueError, TypeError) as e:
+        print(f"[ERRO] {e}", file=sys.stderr)
+        sys.exit(1)
+
+    rfm = calcular_rfm(df, DATA_REFERENCIA)
+    salvar_rfm(rfm, ARQUIVO_SAIDA, NOME_ABA_SAIDA)
+
+    print(f"RFM gerado com {len(rfm)} clientes -> {ARQUIVO_SAIDA} (aba '{NOME_ABA_SAIDA}')")
+
+
+if __name__ == "__main__":
+    main()
