@@ -5,12 +5,13 @@ Transforma uma base de vendas (uma linha por item de fatura) em uma tabela
 com uma linha por cliente, contendo:
 
     R — Recency   : dias desde a última compra (menor = melhor)
-    F — Frequency : nº de faturas distintas (InvoiceNo) do cliente
+    F — Frequency : nº de faturas distintas (Invoice) do cliente
     M — Monetary  : valor total gasto pelo cliente no período
 
 Premissas (ajustáveis nas constantes abaixo):
     - Entrada em Excel (.xlsx) já tratada: online_retail_II_limpo.xlsx
-    - Colunas: CustomerID, InvoiceNo, InvoiceDate, TotalPrice
+    - Colunas: Customer ID, Invoice, InvoiceDate, Quantity, Price
+    - O valor de cada linha é calculado como Quantity * Price
     - Data de referência = data máxima de InvoiceDate do dataset
     - Saída em Excel, uma aba "RFM"
 """
@@ -30,10 +31,14 @@ ARQUIVO_ENTRADA = "online_retail_II_limpo.xlsx"
 ARQUIVO_SAIDA = "rfm.xlsx"
 NOME_ABA_SAIDA = "RFM"
 
-COL_CLIENTE = "CustomerID"
-COL_FATURA = "InvoiceNo"
+COL_CLIENTE = "Customer ID"
+COL_FATURA = "Invoice"
 COL_DATA = "InvoiceDate"
-COL_VALOR = "TotalPrice"
+COL_QUANTIDADE = "Quantity"
+COL_PRECO = "Price"
+
+# Nome da coluna calculada internamente (Quantity * Price)
+COL_VALOR = "ValorTotal"
 
 # Se None, usa a data máxima do dataset como referência.
 # Caso contrário, informe uma string "YYYY-MM-DD".
@@ -70,15 +75,24 @@ def carregar_vendas(caminho: str | Path) -> pd.DataFrame:
 
     df = pd.read_excel(caminho)
 
-    _validar_colunas(df, [COL_CLIENTE, COL_FATURA, COL_DATA, COL_VALOR])
-    _validar_coluna_numerica(df, COL_VALOR)
+    _validar_colunas(
+        df,
+        [COL_CLIENTE, COL_FATURA, COL_DATA, COL_QUANTIDADE, COL_PRECO],
+    )
+    _validar_coluna_numerica(df, COL_QUANTIDADE)
+    _validar_coluna_numerica(df, COL_PRECO)
 
     # Normalizações básicas
     df[COL_DATA] = pd.to_datetime(df[COL_DATA], errors="coerce")
     df = df.dropna(subset=[COL_CLIENTE, COL_DATA])
 
-    # Remove devoluções / valores negativos e faturas canceladas (prefixo 'C')
+    # Remove devoluções / faturas canceladas (prefixo 'C')
     df = df[~df[COL_FATURA].astype(str).str.startswith("C")]
+
+    # Cria o valor total de cada linha
+    df[COL_VALOR] = df[COL_QUANTIDADE] * df[COL_PRECO]
+
+    # Remove valores não positivos
     df = df[df[COL_VALOR] > 0]
 
     return df
