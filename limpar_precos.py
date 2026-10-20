@@ -36,7 +36,7 @@ import xlsxwriter
 # Configuração
 # ---------------------------------------------------------------------------
 ARQUIVO_ENTRADA = "online_retail_II.xlsx"
-ARQUIVO_SAIDA = "online_retail_II_limpo2.xlsx"
+ARQUIVO_SAIDA = "online_retail_II_limpo.xlsx"
 COLUNA_PRECO = "Price"          # nome da coluna de preço
 LIMITE_PRECO = 0.01             # remove linhas com preço <= este valor
 COLUNA_QUANTIDADE = "Quantity"  # nome da coluna de quantidade
