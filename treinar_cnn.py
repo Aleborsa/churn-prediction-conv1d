@@ -9,6 +9,15 @@ Executa três passos fundamentais:
 
 Deve ser executado APÓS adicionar_compra_futura.py, pois depende da coluna
 binária 'Comprou_{DIAS_IGNORADOS}d' presente no rfm.xlsx.
+
+Boas práticas aplicadas:
+- Split 60/20/20 (treino/validação/teste) ANTES da normalização, para
+  evitar data leakage: o MinMaxScaler é ajustado apenas no treino.
+- EarlyStopping monitoriza a validação independente; o teste só é
+  avaliado no final.
+- Formato (amostras, 3, 1) com kernel_size=2: a convolução desliza
+  sobre R -> F -> M, justificando o uso de uma CNN.
+- Métricas académicas (Precision, Recall, F1) via classification_report.
 """
 
 from __future__ import annotations
@@ -18,6 +27,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras import callbacks, layers, models
@@ -44,38 +54,63 @@ def carregar_dados(caminho: str | Path) -> tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
-def normalizar(X: np.ndarray) -> tuple[np.ndarray, MinMaxScaler]:
-    """Passo 1: comprime R, F e M para o intervalo [0, 1]."""
+def dividir_dados(
+    X: np.ndarray, y: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Split 60/20/20 (treino/validação/teste), estratificado pelo alvo.
+
+    Primeiro separa 20% para teste; do restante (80%), separa 25% para
+    validação (que corresponde a 20% do total) e fica com 60% para treino.
+    """
+    X_temp, X_test, y_temp, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp, y_temp, test_size=0.25, random_state=42, stratify=y_temp
+    )
+    return X_train, X_val, X_test, y_train, y_val, y_test
+
+
+def normalizar(
+    X_train: np.ndarray, X_val: np.ndarray, X_test: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, MinMaxScaler]:
+    """
+    Passo 1: comprime R, F e M para o intervalo [0, 1].
+
+    O scaler é ajustado APENAS no treino (evita data leakage) e a mesma
+    régua é aplicada à validação e ao teste.
+    """
     scaler = MinMaxScaler()
-    X_norm = scaler.fit_transform(X)
-    return X_norm, scaler
+    X_train_norm = scaler.fit_transform(X_train)
+    X_val_norm = scaler.transform(X_val)
+    X_test_norm = scaler.transform(X_test)
+    return X_train_norm, X_val_norm, X_test_norm, scaler
 
 
 def formatar_3d(X: np.ndarray) -> np.ndarray:
     """
-    Passo 2: converte (amostras, variáveis) -> (amostras, 1, variáveis).
+    Passo 2: converte (amostras, variáveis) -> (amostras, variáveis, 1).
 
-    R, F e M são características paralelas do cliente (não uma série
-    temporal), por isso são tratadas como 3 "canais" simultâneos num
-    único passo de tempo. A Conv1D com kernel_size=1 combina as três
-    variáveis de uma só vez, como sugerido na literatura de RFM-Net.
+    Cada variável (R, F, M) é tratada como um passo temporal e há 1 canal.
+    Com kernel_size=2, a convolução desliza sobre o cliente: primeiro
+    cruza Recência com Frequência, depois Frequência com Valor Monetário.
     """
-    return X.reshape((X.shape[0], 1, X.shape[1]))
+    return X.reshape((X.shape[0], X.shape[1], 1))
 
 
-def construir_cnn(n_canais: int) -> models.Sequential:
+def construir_cnn(n_passos: int) -> models.Sequential:
     """
     Passo 3: empilha Conv1D -> Dense -> Dense(sigmoid).
 
-    Com apenas 1 passo temporal, o kernel_size=1 faz a convolução agir
-    como uma combinação linear das R, F e M simultâneas. Não há
-    MaxPooling1D, pois não há dimensão temporal a reduzir.
+    A Conv1D com kernel_size=2 percorre os 3 passos (R, F, M) extraindo
+    as interações entre variáveis adjacentes.
     """
     modelo = models.Sequential(
         [
-            layers.Input(shape=(1, n_canais)),
+            layers.Input(shape=(n_passos, 1)),
             layers.Conv1D(
-                filters=32, kernel_size=1, activation="relu", padding="same"
+                filters=32, kernel_size=2, activation="relu", padding="same"
             ),
             layers.Flatten(),
             layers.Dense(16, activation="relu"),
@@ -106,19 +141,19 @@ def main() -> None:
         print(f"[ERRO] {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Passo 1 - Normalização
-    X_norm, _ = normalizar(X)
+    # Split 60/20/20 ANTES da normalização (evita data leakage)
+    X_train, X_val, X_test, y_train, y_val, y_test = dividir_dados(X, y)
 
-    # Passo 2 - Formatação 3D (amostras, 1, 3)
-    X_3d = formatar_3d(X_norm)
+    # Passo 1 - Normalização (fit apenas no treino)
+    X_train_n, X_val_n, X_test_n, _ = normalizar(X_train, X_val, X_test)
 
-    # Split treino/teste (estratificado para preservar a proporção de 0/1)
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_3d, y, test_size=0.2, random_state=42, stratify=y
-    )
+    # Passo 2 - Formatação 3D (amostras, 3, 1)
+    X_train_3d = formatar_3d(X_train_n)
+    X_val_3d = formatar_3d(X_val_n)
+    X_test_3d = formatar_3d(X_test_n)
 
     # Passo 3 - Construção da CNN
-    modelo = construir_cnn(n_canais=X_3d.shape[2])
+    modelo = construir_cnn(n_passos=X_train_3d.shape[1])
     modelo.summary()
 
     early = callbacks.EarlyStopping(
@@ -126,17 +161,32 @@ def main() -> None:
     )
 
     modelo.fit(
-        X_train,
+        X_train_3d,
         y_train,
-        validation_data=(X_test, y_test),
+        validation_data=(X_val_3d, y_val),
         epochs=100,
         batch_size=32,
         callbacks=[early],
         verbose=1,
     )
 
-    loss, acc = modelo.evaluate(X_test, y_test, verbose=0)
+    # Avaliação final no conjunto de teste (nunca visto durante o treino)
+    loss, acc = modelo.evaluate(X_test_3d, y_test, verbose=0)
     print(f"\nAcurácia no teste: {acc:.4f} | Loss: {loss:.4f}")
+
+    # Métricas académicas
+    y_prob = modelo.predict(X_test_3d, verbose=0).ravel()
+    y_pred = (y_prob >= 0.5).astype(int)
+
+    print("\nMatriz de Confusão:")
+    print(confusion_matrix(y_test, y_pred))
+
+    print("\nClassification Report:")
+    print(
+        classification_report(
+            y_test, y_pred, target_names=["Não comprou (0)", "Comprou (1)"]
+        )
+    )
 
 
 if __name__ == "__main__":
