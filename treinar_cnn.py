@@ -53,21 +53,30 @@ def normalizar(X: np.ndarray) -> tuple[np.ndarray, MinMaxScaler]:
 
 def formatar_3d(X: np.ndarray) -> np.ndarray:
     """
-    Passo 2: converte (amostras, variáveis) -> (amostras, passos, canais).
-    Cada variável (R, F, M) é tratada como um passo temporal e há 1 canal.
+    Passo 2: converte (amostras, variáveis) -> (amostras, 1, variáveis).
+
+    R, F e M são características paralelas do cliente (não uma série
+    temporal), por isso são tratadas como 3 "canais" simultâneos num
+    único passo de tempo. A Conv1D com kernel_size=1 combina as três
+    variáveis de uma só vez, como sugerido na literatura de RFM-Net.
     """
-    return X.reshape((X.shape[0], X.shape[1], 1))
+    return X.reshape((X.shape[0], 1, X.shape[1]))
 
 
-def construir_cnn(n_passos: int) -> models.Sequential:
-    """Passo 3: empilha Conv1D -> Dense -> Dense(sigmoid)."""
+def construir_cnn(n_canais: int) -> models.Sequential:
+    """
+    Passo 3: empilha Conv1D -> Dense -> Dense(sigmoid).
+
+    Com apenas 1 passo temporal, o kernel_size=1 faz a convolução agir
+    como uma combinação linear das R, F e M simultâneas. Não há
+    MaxPooling1D, pois não há dimensão temporal a reduzir.
+    """
     modelo = models.Sequential(
         [
-            layers.Input(shape=(n_passos, 1)),
+            layers.Input(shape=(1, n_canais)),
             layers.Conv1D(
-                filters=32, kernel_size=2, activation="relu", padding="same"
+                filters=32, kernel_size=1, activation="relu", padding="same"
             ),
-            layers.MaxPooling1D(pool_size=2),
             layers.Flatten(),
             layers.Dense(16, activation="relu"),
             layers.Dense(1, activation="sigmoid"),
@@ -100,7 +109,7 @@ def main() -> None:
     # Passo 1 - Normalização
     X_norm, _ = normalizar(X)
 
-    # Passo 2 - Formatação 3D
+    # Passo 2 - Formatação 3D (amostras, 1, 3)
     X_3d = formatar_3d(X_norm)
 
     # Split treino/teste (estratificado para preservar a proporção de 0/1)
@@ -109,7 +118,7 @@ def main() -> None:
     )
 
     # Passo 3 - Construção da CNN
-    modelo = construir_cnn(n_passos=X_3d.shape[1])
+    modelo = construir_cnn(n_canais=X_3d.shape[2])
     modelo.summary()
 
     early = callbacks.EarlyStopping(
