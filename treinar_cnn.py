@@ -11,6 +11,7 @@ Boas práticas aplicadas:
 - Limiar de decisão otimizado na validação (maximiza F1) para TODOS os
   modelos (CNN, RF e LogReg), garantindo comparação justa.
 - Semente de aleatoriedade travada para favorecer a reprodutibilidade.
+- Logging em arquivo (pasta logs/) e na consola, em vez de print().
 
 Nota sobre o log1p no Monetary:
 - Compare as versões com e sem log1p usando o mesmo split.
@@ -22,7 +23,11 @@ Nota sobre o log1p no Monetary:
 
 from __future__ import annotations
 
+import io
+import logging
 import sys
+from contextlib import redirect_stdout
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -52,6 +57,59 @@ COLUNAS_RFM = ["Recency", "Frequency", "Monetary"]
 COL_ALVO = f"Comprou_{DIAS_IGNORADOS}d"
 
 
+def configurar_logging() -> logging.Logger:
+    """
+    Configura o logger para escrever em arquivo (pasta logs/) e na consola.
+
+    O nome do arquivo inclui um timestamp para não sobrescrever execuções
+    anteriores. Devolve o logger pronto a usar.
+    """
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = logs_dir / f"treinar_cnn_{timestamp}.log"
+
+    logger = logging.getLogger("treinar_cnn")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    logger.propagate = False
+
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    logger.info("Logging configurado. Arquivo: %s", log_file)
+    return logger
+
+
+logger = configurar_logging()
+
+
+class LoggingCallback(callbacks.Callback):
+    """Registra o progresso de cada época no logger (substitui verbose=1)."""
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        logger.info(
+            "Época %d - loss: %.4f - accuracy: %.4f - val_loss: %.4f - val_accuracy: %.4f",
+            epoch + 1,
+            logs.get("loss", 0.0),
+            logs.get("accuracy", 0.0),
+            logs.get("val_loss", 0.0),
+            logs.get("val_accuracy", 0.0),
+        )
+
+
 def imprimir_metricas_validacao(
     nome: str,
     y_true: np.ndarray,
@@ -61,9 +119,11 @@ def imprimir_metricas_validacao(
     roc_auc = roc_auc_score(y_true, y_prob)
     ap = average_precision_score(y_true, y_prob)
 
-    print(
-        f"{nome} — Validação | "
-        f"ROC-AUC: {roc_auc:.4f} | AP: {ap:.4f}"
+    logger.info(
+        "%s — Validação | ROC-AUC: %.4f | AP: %.4f",
+        nome,
+        roc_auc,
+        ap,
     )
 
 
@@ -167,7 +227,7 @@ def avaliar_modelo(
     nome: str, y_true: np.ndarray, y_prob: np.ndarray, limiar: float = 0.5
 ) -> None:
     """
-    Imprime ROC-AUC, AP, acurácias (limiar padrão e otimizado), matriz de
+    Registra ROC-AUC, AP, acurácias (limiar padrão e otimizado), matriz de
     confusão e classification report.
 
     Recebe as probabilidades contínuas (y_prob) e aplica o limiar para
@@ -185,17 +245,18 @@ def avaliar_modelo(
     acc_padrao = accuracy_score(y_true, (y_prob >= 0.5).astype(int))
     acc_otim = accuracy_score(y_true, y_pred)
 
-    print(f"\n===== {nome} =====")
-    print(f"ROC-AUC: {roc_auc:.4f} | AP: {ap:.4f} | Limiar: {limiar:.2f}")
-    print(f"Acurácia (limiar padrão 0.50): {acc_padrao:.4f}")
-    print(f"Acurácia (limiar otimizado {limiar:.2f}): {acc_otim:.4f}")
-    print("Matriz de Confusão:")
-    print(confusion_matrix(y_true, y_pred))
-    print("Classification Report:")
-    print(
+    logger.info("===== %s =====", nome)
+    logger.info(
+        "ROC-AUC: %.4f | AP: %.4f | Limiar: %.2f", roc_auc, ap, limiar
+    )
+    logger.info("Acurácia (limiar padrão 0.50): %.4f", acc_padrao)
+    logger.info("Acurácia (limiar otimizado %.2f): %.4f", limiar, acc_otim)
+    logger.info("Matriz de Confusão:\n%s", confusion_matrix(y_true, y_pred))
+    logger.info(
+        "Classification Report:\n%s",
         classification_report(
             y_true, y_pred, target_names=["Não comprou (0)", "Comprou (1)"]
-        )
+        ),
     )
 
 
@@ -220,13 +281,12 @@ def treinar_baselines(
     rf = RandomForestClassifier(n_estimators=200, random_state=42)
     rf.fit(X_train, y_train)
     rf_val_prob = rf.predict_proba(X_val)[:, 1]
-    imprimir_metricas_validacao(
-        "Random Forest", y_val, rf_val_prob
-    )
+    imprimir_metricas_validacao("Random Forest", y_val, rf_val_prob)
     rf_limiar, rf_f1_val = otimizar_limiar(y_val, rf_val_prob)
-    print(
-        f"\nLimiar ótimo (validação) - Random Forest: {rf_limiar:.2f} "
-        f"(F1 validação = {rf_f1_val:.4f})"
+    logger.info(
+        "Limiar ótimo (validação) - Random Forest: %.2f (F1 validação = %.4f)",
+        rf_limiar,
+        rf_f1_val,
     )
     rf_test_prob = rf.predict_proba(X_test)[:, 1]
     avaliar_modelo("Random Forest (baseline)", y_test, rf_test_prob, limiar=rf_limiar)
@@ -234,13 +294,12 @@ def treinar_baselines(
     lr = LogisticRegression(max_iter=1000, random_state=42)
     lr.fit(X_train, y_train)
     lr_val_prob = lr.predict_proba(X_val)[:, 1]
-    imprimir_metricas_validacao(
-        "Regressão Logística", y_val, lr_val_prob
-    )
+    imprimir_metricas_validacao("Regressão Logística", y_val, lr_val_prob)
     lr_limiar, lr_f1_val = otimizar_limiar(y_val, lr_val_prob)
-    print(
-        f"\nLimiar ótimo (validação) - Regressão Logística: {lr_limiar:.2f} "
-        f"(F1 validação = {lr_f1_val:.4f})"
+    logger.info(
+        "Limiar ótimo (validação) - Regressão Logística: %.2f (F1 validação = %.4f)",
+        lr_limiar,
+        lr_f1_val,
     )
     lr_test_prob = lr.predict_proba(X_test)[:, 1]
     avaliar_modelo(
@@ -265,19 +324,21 @@ def otimizar_limiar(y_true: np.ndarray, y_prob: np.ndarray) -> tuple[float, floa
 
 
 def main() -> None:
+    logger.info("Iniciando treino da CNN 1D...")
+
     caminho = Path(ARQUIVO_SAIDA)
     if not caminho.exists():
-        print(
-            f"[ERRO] Arquivo RFM não encontrado: {caminho}. "
-            f"Execute engenharia_rfm.py e adicionar_compra_futura.py primeiro.",
-            file=sys.stderr,
+        logger.error(
+            "Arquivo RFM não encontrado: %s. "
+            "Execute engenharia_rfm.py e adicionar_compra_futura.py primeiro.",
+            caminho,
         )
         sys.exit(1)
 
     try:
         X, y = carregar_dados(caminho)
     except (ValueError, FileNotFoundError) as e:
-        print(f"[ERRO] {e}", file=sys.stderr)
+        logger.error("%s", e)
         sys.exit(1)
 
     # Split 60/20/20 ANTES da normalização (evita data leakage)
@@ -299,10 +360,15 @@ def main() -> None:
 
     # Passo 3 - Construção da CNN
     modelo = construir_cnn(n_passos=X_train_3d.shape[1])
-    modelo.summary()
+
+    # Redireciona o summary() (que escreve em stdout) para o log
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        modelo.summary()
+    logger.info("Resumo do modelo:\n%s", buffer.getvalue())
 
     early = callbacks.EarlyStopping(
-        monitor="val_loss",min_delta=1e-4, patience=10, restore_best_weights=True
+        monitor="val_loss", min_delta=1e-4, patience=10, restore_best_weights=True
     )
 
     modelo.fit(
@@ -311,8 +377,8 @@ def main() -> None:
         validation_data=(X_val_3d, y_val),
         epochs=100,
         batch_size=32,
-        callbacks=[early],
-        verbose=1,
+        callbacks=[early, LoggingCallback()],
+        verbose=0,
     )
 
     # Otimização do limiar na validação (maximiza F1)
@@ -320,25 +386,30 @@ def main() -> None:
         X_val_3d, verbose=0
     ).ravel()
 
-    imprimir_metricas_validacao(
-        "CNN 1D", y_val, y_val_prob
-    )
+    imprimir_metricas_validacao("CNN 1D", y_val, y_val_prob)
 
     limiar_otimo, f1_val = otimizar_limiar(
         y_val, y_val_prob
     )
-    print(
-        f"\nLimiar ótimo (validação) - CNN: {limiar_otimo:.2f} "
-        f"(F1 validação = {f1_val:.4f})"
+    logger.info(
+        "Limiar ótimo (validação) - CNN: %.2f (F1 validação = %.4f)",
+        limiar_otimo,
+        f1_val,
     )
 
     # Avaliação final no conjunto de teste (nunca visto durante o treino)
     loss, acc = modelo.evaluate(X_test_3d, y_test, verbose=0)
-    print(f"\nAcurácia no teste (CNN, limiar 0.50 do TF): {acc:.4f} | Loss: {loss:.4f}")
+    logger.info(
+        "Acurácia no teste (CNN, limiar 0.50 do TF): %.4f | Loss: %.4f",
+        acc,
+        loss,
+    )
 
     # Métricas académicas da CNN com o limiar ótimo
     y_prob = modelo.predict(X_test_3d, verbose=0).ravel()
     avaliar_modelo("CNN 1D", y_test, y_prob, limiar=limiar_otimo)
+
+    logger.info("Treino concluído.")
 
 
 if __name__ == "__main__":
