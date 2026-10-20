@@ -10,6 +10,7 @@ com uma linha por cliente, contendo:
 
 Premissas (ajustáveis nas constantes abaixo):
     - Entrada em Excel (.xlsx) já tratada: online_retail_II_limpo.xlsx
+    - TODAS as abas do arquivo são lidas e concatenadas antes do cálculo
     - Colunas: Customer ID, Invoice, InvoiceDate, Quantity, Price
     - O valor de cada linha é calculado como Quantity * Price
     - Data de referência = data máxima de InvoiceDate do dataset
@@ -48,19 +49,21 @@ DATA_REFERENCIA: str | None = None
 # ---------------------------------------------------------------------------
 # Validações
 # ---------------------------------------------------------------------------
-def _validar_colunas(df: pd.DataFrame, colunas: list[str]) -> None:
+def _validar_colunas(df: pd.DataFrame, colunas: list[str], nome_aba: str = "") -> None:
     faltantes = [c for c in colunas if c not in df.columns]
     if faltantes:
+        origem = f" (aba '{nome_aba}')" if nome_aba else ""
         raise ValueError(
-            f"Colunas ausentes no arquivo de entrada: {faltantes}. "
+            f"Colunas ausentes no arquivo de entrada{origem}: {faltantes}. "
             f"Colunas disponíveis: {list(df.columns)}"
         )
 
 
-def _validar_coluna_numerica(df: pd.DataFrame, nome_coluna: str) -> None:
+def _validar_coluna_numerica(df: pd.DataFrame, nome_coluna: str, nome_aba: str = "") -> None:
     if not pd.api.types.is_numeric_dtype(df[nome_coluna]):
+        origem = f" (aba '{nome_aba}')" if nome_aba else ""
         raise TypeError(
-            f"A coluna '{nome_coluna}' deve ser numérica, "
+            f"A coluna '{nome_coluna}'{origem} deve ser numérica, "
             f"mas veio como {df[nome_coluna].dtype}."
         )
 
@@ -73,14 +76,24 @@ def carregar_vendas(caminho: str | Path) -> pd.DataFrame:
     if not caminho.exists():
         raise FileNotFoundError(f"Arquivo não encontrado: {caminho}")
 
-    df = pd.read_excel(caminho)
+    # Lê TODAS as abas do arquivo como um dict {nome_aba: DataFrame}
+    abas = pd.read_excel(caminho, sheet_name=None)
 
-    _validar_colunas(
-        df,
-        [COL_CLIENTE, COL_FATURA, COL_DATA, COL_QUANTIDADE, COL_PRECO],
-    )
-    _validar_coluna_numerica(df, COL_QUANTIDADE)
-    _validar_coluna_numerica(df, COL_PRECO)
+    if not abas:
+        raise ValueError("O arquivo de entrada não possui abas para leitura.")
+
+    colunas_obrigatorias = [COL_CLIENTE, COL_FATURA, COL_DATA, COL_QUANTIDADE, COL_PRECO]
+
+    frames = []
+    for nome_aba, df_aba in abas.items():
+        _validar_colunas(df_aba, colunas_obrigatorias, nome_aba)
+        _validar_coluna_numerica(df_aba, COL_QUANTIDADE, nome_aba)
+        _validar_coluna_numerica(df_aba, COL_PRECO, nome_aba)
+        df_aba = df_aba.copy()
+        df_aba["origem_aba"] = nome_aba
+        frames.append(df_aba)
+
+    df = pd.concat(frames, ignore_index=True)
 
     # Normalizações básicas
     df[COL_DATA] = pd.to_datetime(df[COL_DATA], errors="coerce")
