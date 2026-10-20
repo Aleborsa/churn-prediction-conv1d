@@ -11,6 +11,9 @@ Deve ser executado APÓS adicionar_compra_futura.py, pois depende da coluna
 binária 'Comprou_{DIAS_IGNORADOS}d' presente no rfm.xlsx.
 
 Boas práticas aplicadas:
+- Transformação log1p no Monetary antes da normalização, para reduzir o
+  efeito de outliers (ex.: clientes atacadistas) que comprimiriam a base
+  para perto de 0 no MinMaxScaler.
 - Split 60/20/20 (treino/validação/teste) ANTES da normalização, para
   evitar data leakage: o MinMaxScaler é ajustado apenas no treino.
 - EarlyStopping monitoriza a validação independente; o teste só é
@@ -18,6 +21,8 @@ Boas práticas aplicadas:
 - Formato (amostras, 3, 1) com kernel_size=2: a convolução desliza
   sobre R -> F -> M, justificando o uso de uma CNN.
 - Métricas académicas (Precision, Recall, F1) via classification_report.
+- Baselines (Random Forest e Regressão Logística) treinados em paralelo
+  como "termómetros" para comparação na tabela de resultados do artigo.
 """
 
 from __future__ import annotations
@@ -27,6 +32,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
@@ -39,7 +46,11 @@ COL_ALVO = f"Comprou_{DIAS_IGNORADOS}d"
 
 
 def carregar_dados(caminho: str | Path) -> tuple[np.ndarray, np.ndarray]:
-    """Lê o rfm.xlsx e devolve (X, y) como arrays NumPy."""
+    """
+    Lê o rfm.xlsx e devolve (X, y) como arrays NumPy.
+
+    Aplica log1p no Monetary para atenuar outliers antes da normalização.
+    """
     df = pd.read_excel(caminho, sheet_name=NOME_ABA_SAIDA)
 
     faltantes = [c for c in COLUNAS_RFM + [COL_ALVO] if c not in df.columns]
@@ -48,6 +59,9 @@ def carregar_dados(caminho: str | Path) -> tuple[np.ndarray, np.ndarray]:
             f"Colunas ausentes no RFM: {faltantes}. "
             f"Execute adicionar_compra_futura.py primeiro."
         )
+
+    # Transformação logarítmica no Monetary (reduz o peso de outliers)
+    df["Monetary"] = np.log1p(df["Monetary"])
 
     X = df[COLUNAS_RFM].to_numpy(dtype=float)
     y = df[COL_ALVO].to_numpy(dtype=int)
@@ -125,6 +139,40 @@ def construir_cnn(n_passos: int) -> models.Sequential:
     return modelo
 
 
+def avaliar_modelo(nome: str, y_true: np.ndarray, y_pred: np.ndarray) -> None:
+    """Imprime matriz de confusão e classification report de um modelo."""
+    print(f"\n===== {nome} =====")
+    print("Matriz de Confusão:")
+    print(confusion_matrix(y_true, y_pred))
+    print("Classification Report:")
+    print(
+        classification_report(
+            y_true, y_pred, target_names=["Não comprou (0)", "Comprou (1)"]
+        )
+    )
+
+
+def treinar_baselines(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+) -> None:
+    """
+    Treina Random Forest e Regressão Logística como baselines.
+
+    Servem de "termómetro" para comparar com a CNN na tabela do artigo.
+    Usam os dados normalizados 2D (sem reshape), pois não são convolucionais.
+    """
+    rf = RandomForestClassifier(n_estimators=200, random_state=42)
+    rf.fit(X_train, y_train)
+    avaliar_modelo("Random Forest (baseline)", y_test, rf.predict(X_test))
+
+    lr = LogisticRegression(max_iter=1000, random_state=42)
+    lr.fit(X_train, y_train)
+    avaliar_modelo("Regressão Logística (baseline)", y_test, lr.predict(X_test))
+
+
 def main() -> None:
     caminho = Path(ARQUIVO_SAIDA)
     if not caminho.exists():
@@ -146,6 +194,9 @@ def main() -> None:
 
     # Passo 1 - Normalização (fit apenas no treino)
     X_train_n, X_val_n, X_test_n, _ = normalizar(X_train, X_val, X_test)
+
+    # Baselines (Random Forest e Regressão Logística) em paralelo
+    treinar_baselines(X_train_n, X_test_n, y_train, y_test)
 
     # Passo 2 - Formatação 3D (amostras, 3, 1)
     X_train_3d = formatar_3d(X_train_n)
@@ -172,21 +223,12 @@ def main() -> None:
 
     # Avaliação final no conjunto de teste (nunca visto durante o treino)
     loss, acc = modelo.evaluate(X_test_3d, y_test, verbose=0)
-    print(f"\nAcurácia no teste: {acc:.4f} | Loss: {loss:.4f}")
+    print(f"\nAcurácia no teste (CNN): {acc:.4f} | Loss: {loss:.4f}")
 
-    # Métricas académicas
+    # Métricas académicas da CNN
     y_prob = modelo.predict(X_test_3d, verbose=0).ravel()
     y_pred = (y_prob >= 0.5).astype(int)
-
-    print("\nMatriz de Confusão:")
-    print(confusion_matrix(y_test, y_pred))
-
-    print("\nClassification Report:")
-    print(
-        classification_report(
-            y_test, y_pred, target_names=["Não comprou (0)", "Comprou (1)"]
-        )
-    )
+    avaliar_modelo("CNN 1D", y_test, y_pred)
 
 
 if __name__ == "__main__":
