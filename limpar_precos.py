@@ -1,13 +1,14 @@
 """
-Remove linhas com preço inválido (<= 0.01) ou quantidade inválida (<= 0)
-de um arquivo Excel com múltiplas abas (anos diferentes, mesmas colunas)
-e gera um novo Excel mantendo as abas separadas por ano.
+Remove linhas com preço inválido (<= 0.01), quantidade inválida (<= 0)
+ou Customer ID vazio de um arquivo Excel com múltiplas abas (anos
+diferentes, mesmas colunas) e gera um novo Excel mantendo as abas
+separadas por ano.
 
 Para cada aba de origem, são geradas 2 abas de saída:
     - "limpas_<aba>":    apenas as linhas válidas
-                         (Price > 0.01 E Quantity > 0)
+                         (Price > 0.01 E Quantity > 0 E Customer ID preenchido)
     - "removidas_<aba>": apenas as linhas descartadas
-                         (Price <= 0.01 OU Quantity <= 0)
+                         (Price <= 0.01 OU Quantity <= 0 OU Customer ID vazio)
 
 Ex.: com 2 abas de entrada -> 4 abas de saída.
 
@@ -41,6 +42,7 @@ COLUNA_PRECO = "Price"          # nome da coluna de preço
 LIMITE_PRECO = 0.01             # remove linhas com preço <= este valor
 COLUNA_QUANTIDADE = "Quantity"  # nome da coluna de quantidade
 LIMITE_QUANTIDADE = 0           # remove linhas com quantidade <= este valor
+COLUNA_CUSTOMER_ID = "Customer ID"  # nome da coluna de cliente
 PREFIXO_REMOVIDAS = "removidas"
 PREFIXO_LIMPAS = "limpas"
 
@@ -65,6 +67,15 @@ def _validar_coluna_numerica(df: pd.DataFrame, nome_coluna: str, nome_aba: str) 
         raise TypeError(
             f"A coluna '{nome_coluna}' da aba '{nome_aba}' não é numérica "
             f"(tipo atual: {df[nome_coluna].dtype})."
+        )
+
+
+def _validar_coluna_existente(df: pd.DataFrame, nome_coluna: str, nome_aba: str) -> None:
+    """Garante que a coluna existe (sem exigir tipo específico)."""
+    if nome_coluna not in df.columns:
+        raise KeyError(
+            f"A coluna '{nome_coluna}' não existe na aba '{nome_aba}'. "
+            f"Colunas disponíveis: {list(df.columns)}"
         )
 
 
@@ -101,12 +112,14 @@ def separar_por_aba(abas: dict) -> tuple:
                     - total_removidas
                     - total_por_preco
                     - total_por_quantidade
+                    - total_por_customer_vazio
                     - total_por_ambos
                     - total_limpas
 
     Critérios de remoção (vai para "removidas" se atender QUALQUER um):
         - Price <= LIMITE_PRECO
         - Quantity <= LIMITE_QUANTIDADE
+        - Customer ID vazio (NaN/None ou string vazia)
     """
     saidas = {}
 
@@ -114,19 +127,29 @@ def separar_por_aba(abas: dict) -> tuple:
     total_removidas = 0
     total_por_preco = 0
     total_por_quantidade = 0
+    total_por_customer_vazio = 0
     total_por_ambos = 0
     total_limpas = 0
 
     for nome_aba, df in abas.items():
         _validar_coluna_numerica(df, COLUNA_PRECO, nome_aba)
         _validar_coluna_numerica(df, COLUNA_QUANTIDADE, nome_aba)
+        _validar_coluna_existente(df, COLUNA_CUSTOMER_ID, nome_aba)
 
         # Máscaras individuais (para log)
         mascara_preco = df[COLUNA_PRECO] <= LIMITE_PRECO
         mascara_qtd = df[COLUNA_QUANTIDADE] <= LIMITE_QUANTIDADE
 
-        # Máscara combinada: inválida se preço OU quantidade inválidos
-        mascara_invalida = mascara_preco | mascara_qtd
+        # Customer ID vazio: NaN/None ou string vazia (após strip)
+        col_customer = df[COLUNA_CUSTOMER_ID]
+        mascara_customer_vazio = col_customer.isna()
+        if col_customer.dtype == object:
+            mascara_customer_vazio = mascara_customer_vazio | (
+                col_customer.astype(str).str.strip() == ""
+            )
+
+        # Máscara combinada: inválida se atender QUALQUER critério
+        mascara_invalida = mascara_preco | mascara_qtd | mascara_customer_vazio
 
         removidas = df[mascara_invalida].copy()
         limpas = df[~mascara_invalida].copy()
@@ -154,12 +177,16 @@ def separar_por_aba(abas: dict) -> tuple:
         # Acumula estatísticas globais
         qtd_preco = int(mascara_preco.sum())
         qtd_qtd = int(mascara_qtd.sum())
-        qtd_ambos = int((mascara_preco & mascara_qtd).sum())
+        qtd_customer_vazio = int(mascara_customer_vazio.sum())
+        qtd_ambos = int(
+            (mascara_preco & mascara_qtd & mascara_customer_vazio).sum()
+        )
 
         total_linhas += len(df)
         total_removidas += len(removidas)
         total_por_preco += qtd_preco
         total_por_quantidade += qtd_qtd
+        total_por_customer_vazio += qtd_customer_vazio
         total_por_ambos += qtd_ambos
         total_limpas += len(limpas)
 
@@ -172,7 +199,8 @@ def separar_por_aba(abas: dict) -> tuple:
             f"    detalhe remoção: "
             f"preço<={LIMITE_PRECO}: {qtd_preco} | "
             f"qtd<={LIMITE_QUANTIDADE}: {qtd_qtd} | "
-            f"ambos: {qtd_ambos}"
+            f"customer vazio: {qtd_customer_vazio} | "
+            f"todos os 3: {qtd_ambos}"
         )
 
     estatisticas = {
@@ -180,6 +208,7 @@ def separar_por_aba(abas: dict) -> tuple:
         "total_removidas": total_removidas,
         "total_por_preco": total_por_preco,
         "total_por_quantidade": total_por_quantidade,
+        "total_por_customer_vazio": total_por_customer_vazio,
         "total_por_ambos": total_por_ambos,
         "total_limpas": total_limpas,
     }
@@ -263,7 +292,11 @@ def main() -> None:
         f"(qtd <= {LIMITE_QUANTIDADE}):          {estatisticas['total_por_quantidade']}"
     )
     print(
-        f"  - atenderam a AMBOS os critérios:  {estatisticas['total_por_ambos']}"
+        f"  - atenderam ao 3º critério "
+        f"(Customer ID vazio):     {estatisticas['total_por_customer_vazio']}"
+    )
+    print(
+        f"  - atenderam aos 3 critérios:       {estatisticas['total_por_ambos']}"
     )
     print(f"Total de linhas limpas:             {estatisticas['total_limpas']}")
     print(f"Total de abas de saída:             {len(saidas)}")
