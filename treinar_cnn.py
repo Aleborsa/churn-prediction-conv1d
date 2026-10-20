@@ -20,12 +20,14 @@ Boas práticas aplicadas:
   avaliado no final.
 - Formato (amostras, 3, 1) com kernel_size=2: a convolução desliza
   sobre R -> F -> M, justificando o uso de uma CNN.
-- Métricas académicas (ROC-AUC, PR-AUC, Precision, Recall, F1) via
+- Métricas académicas (ROC-AUC, AP, Precision, Recall, F1) via
   classification_report e roc_auc_score/average_precision_score.
 - Baselines (Random Forest e Regressão Logística) treinados em paralelo
   como "termómetros" para comparação na tabela de resultados do artigo.
-- Limiar de decisão da CNN otimizado na validação (maximiza F1) e
-  aplicado no teste, em vez do corte fixo de 0.5.
+- Limiar de decisão otimizado na validação (maximiza F1) para TODOS os
+  modelos (CNN, RF e LogReg), garantindo comparação justa.
+- Semente de aleatoriedade travada (tf.keras.utils.set_random_seed) para
+  reprodutibilidade dos resultados publicados.
 
 Nota sobre o log1p no Monetary (teste A/B sugerido pelo avaliador):
 - Execute uma vez com a linha `df["Monetary"] = np.log1p(df["Monetary"])`
@@ -41,9 +43,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
+    accuracy_score,
     average_precision_score,
     classification_report,
     confusion_matrix,
@@ -55,6 +59,10 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras import callbacks, layers, models
 
 from engenharia_rfm import ARQUIVO_SAIDA, DIAS_IGNORADOS, NOME_ABA_SAIDA
+
+# Trava a semente de aleatoriedade (pesos iniciais, shuffle, etc.)
+# para garantir reprodutibilidade dos resultados publicados.
+tf.keras.utils.set_random_seed(42)
 
 COLUNAS_RFM = ["Recency", "Frequency", "Monetary"]
 COL_ALVO = f"Comprou_{DIAS_IGNORADOS}d"
@@ -160,19 +168,28 @@ def avaliar_modelo(
     nome: str, y_true: np.ndarray, y_prob: np.ndarray, limiar: float = 0.5
 ) -> None:
     """
-    Imprime ROC-AUC, PR-AUC, matriz de confusão e classification report.
+    Imprime ROC-AUC, AP, acurácias (limiar padrão e otimizado), matriz de
+    confusão e classification report.
 
     Recebe as probabilidades contínuas (y_prob) e aplica o limiar para
-    gerar as predições binárias. ROC-AUC e PR-AUC são calculados sobre
-    as probabilidades, independentemente do limiar.
+    gerar as predições binárias. ROC-AUC e AP são calculados sobre as
+    probabilidades, independentemente do limiar.
+
+    A acurácia é mostrada em dois valores para deixar explícito o impacto
+    do ajuste de limiar (o TensorFlow usa 0.5 internamente; a matriz de
+    confusão abaixo reflete o limiar otimizado).
     """
     y_pred = (y_prob >= limiar).astype(int)
 
     roc_auc = roc_auc_score(y_true, y_prob)
-    pr_auc = average_precision_score(y_true, y_prob)
+    ap = average_precision_score(y_true, y_prob)
+    acc_padrao = accuracy_score(y_true, (y_prob >= 0.5).astype(int))
+    acc_otim = accuracy_score(y_true, y_pred)
 
     print(f"\n===== {nome} =====")
-    print(f"ROC-AUC: {roc_auc:.4f} | PR-AUC: {pr_auc:.4f} | Limiar: {limiar:.2f}")
+    print(f"ROC-AUC: {roc_auc:.4f} | AP: {ap:.4f} | Limiar: {limiar:.2f}")
+    print(f"Acurácia (limiar padrão 0.50): {acc_padrao:.4f}")
+    print(f"Acurácia (limiar otimizado {limiar:.2f}): {acc_otim:.4f}")
     print("Matriz de Confusão:")
     print(confusion_matrix(y_true, y_pred))
     print("Classification Report:")
@@ -185,8 +202,10 @@ def avaliar_modelo(
 
 def treinar_baselines(
     X_train: np.ndarray,
+    X_val: np.ndarray,
     X_test: np.ndarray,
     y_train: np.ndarray,
+    y_val: np.ndarray,
     y_test: np.ndarray,
 ) -> None:
     """
@@ -194,17 +213,34 @@ def treinar_baselines(
 
     Servem de "termómetro" para comparar com a CNN na tabela do artigo.
     Usam os dados normalizados 2D (sem reshape), pois não são convolucionais.
-    Enviam as probabilidades (predict_proba[:, 1]) para avaliar_modelo.
+
+    Para comparação justa com a CNN, o limiar de decisão de cada baseline
+    também é otimizado na validação (maximiza F1) e só depois aplicado no
+    teste.
     """
     rf = RandomForestClassifier(n_estimators=200, random_state=42)
     rf.fit(X_train, y_train)
-    rf_prob = rf.predict_proba(X_test)[:, 1]
-    avaliar_modelo("Random Forest (baseline)", y_test, rf_prob)
+    rf_val_prob = rf.predict_proba(X_val)[:, 1]
+    rf_limiar, rf_f1_val = otimizar_limiar(y_val, rf_val_prob)
+    print(
+        f"\nLimiar ótimo (validação) - Random Forest: {rf_limiar:.2f} "
+        f"(F1 validação = {rf_f1_val:.4f})"
+    )
+    rf_test_prob = rf.predict_proba(X_test)[:, 1]
+    avaliar_modelo("Random Forest (baseline)", y_test, rf_test_prob, limiar=rf_limiar)
 
     lr = LogisticRegression(max_iter=1000, random_state=42)
     lr.fit(X_train, y_train)
-    lr_prob = lr.predict_proba(X_test)[:, 1]
-    avaliar_modelo("Regressão Logística (baseline)", y_test, lr_prob)
+    lr_val_prob = lr.predict_proba(X_val)[:, 1]
+    lr_limiar, lr_f1_val = otimizar_limiar(y_val, lr_val_prob)
+    print(
+        f"\nLimiar ótimo (validação) - Regressão Logística: {lr_limiar:.2f} "
+        f"(F1 validação = {lr_f1_val:.4f})"
+    )
+    lr_test_prob = lr.predict_proba(X_test)[:, 1]
+    avaliar_modelo(
+        "Regressão Logística (baseline)", y_test, lr_test_prob, limiar=lr_limiar
+    )
 
 
 def otimizar_limiar(y_true: np.ndarray, y_prob: np.ndarray) -> tuple[float, float]:
@@ -245,8 +281,11 @@ def main() -> None:
     # Passo 1 - Normalização (fit apenas no treino)
     X_train_n, X_val_n, X_test_n, _ = normalizar(X_train, X_val, X_test)
 
-    # Baselines (Random Forest e Regressão Logística) em paralelo
-    treinar_baselines(X_train_n, X_test_n, y_train, y_test)
+    # Baselines (Random Forest e Regressão Logística) em paralelo,
+    # com limiar otimizado na validação (mesma regra da CNN)
+    treinar_baselines(
+        X_train_n, X_val_n, X_test_n, y_train, y_val, y_test
+    )
 
     # Passo 2 - Formatação 3D (amostras, 3, 1)
     X_train_3d = formatar_3d(X_train_n)
@@ -275,13 +314,13 @@ def main() -> None:
     y_val_prob = modelo.predict(X_val_3d, verbose=0).ravel()
     limiar_otimo, f1_val = otimizar_limiar(y_val, y_val_prob)
     print(
-        f"\nLimiar ótimo (validação): {limiar_otimo:.2f} "
+        f"\nLimiar ótimo (validação) - CNN: {limiar_otimo:.2f} "
         f"(F1 validação = {f1_val:.4f})"
     )
 
     # Avaliação final no conjunto de teste (nunca visto durante o treino)
     loss, acc = modelo.evaluate(X_test_3d, y_test, verbose=0)
-    print(f"\nAcurácia no teste (CNN): {acc:.4f} | Loss: {loss:.4f}")
+    print(f"\nAcurácia no teste (CNN, limiar 0.50 do TF): {acc:.4f} | Loss: {loss:.4f}")
 
     # Métricas académicas da CNN com o limiar ótimo
     y_prob = modelo.predict(X_test_3d, verbose=0).ravel()
