@@ -78,7 +78,7 @@ def carregar_dados(caminho: str | Path) -> tuple[np.ndarray, np.ndarray]:
         )
 
     # Transformação logarítmica no Monetary (reduz o peso de outliers)
-    df["Monetary"] = np.log1p(df["Monetary"])
+    # df["Monetary"] = np.log1p(df["Monetary"])
 
     X = df[COLUNAS_RFM].to_numpy(dtype=float)
     y = df[COL_ALVO].to_numpy(dtype=int)
