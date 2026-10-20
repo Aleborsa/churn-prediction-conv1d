@@ -85,20 +85,37 @@ def _nome_aba_saida(prefixo: str, nome_origem: str) -> str:
     return f"{prefixo}_{base}"
 
 
-def separar_por_aba(abas: dict) -> dict:
+def separar_por_aba(abas: dict) -> tuple:
     """
-    Recebe um dict {nome_aba: DataFrame} e retorna um dict
-    {nome_aba_saida: DataFrame} com as abas de saída já separadas por ano.
+    Recebe um dict {nome_aba: DataFrame} e retorna uma tupla
+    (saidas, estatisticas):
 
-    Para cada aba de origem são geradas 2 entradas:
-        - "limpas_<aba>"
-        - "removidas_<aba>"
+        saidas: dict {nome_aba_saida: DataFrame} com as abas de saída
+                já separadas por ano. Para cada aba de origem são geradas
+                2 entradas:
+                    - "limpas_<aba>"
+                    - "removidas_<aba>"
+
+        estatisticas: dict com os totais consolidados de todas as abas:
+                    - total_linhas
+                    - total_removidas
+                    - total_por_preco
+                    - total_por_quantidade
+                    - total_por_ambos
+                    - total_limpas
 
     Critérios de remoção (vai para "removidas" se atender QUALQUER um):
         - Price <= LIMITE_PRECO
         - Quantity <= LIMITE_QUANTIDADE
     """
     saidas = {}
+
+    total_linhas = 0
+    total_removidas = 0
+    total_por_preco = 0
+    total_por_quantidade = 0
+    total_por_ambos = 0
+    total_limpas = 0
 
     for nome_aba, df in abas.items():
         _validar_coluna_numerica(df, COLUNA_PRECO, nome_aba)
@@ -134,6 +151,18 @@ def separar_por_aba(abas: dict) -> dict:
         saidas[nome_limpas] = limpas
         saidas[nome_removidas] = removidas
 
+        # Acumula estatísticas globais
+        qtd_preco = int(mascara_preco.sum())
+        qtd_qtd = int(mascara_qtd.sum())
+        qtd_ambos = int((mascara_preco & mascara_qtd).sum())
+
+        total_linhas += len(df)
+        total_removidas += len(removidas)
+        total_por_preco += qtd_preco
+        total_por_quantidade += qtd_qtd
+        total_por_ambos += qtd_ambos
+        total_limpas += len(limpas)
+
         print(
             f"[aba: {nome_aba}] total={len(df)} | "
             f"removidas={len(removidas)} -> '{nome_removidas}' | "
@@ -141,12 +170,21 @@ def separar_por_aba(abas: dict) -> dict:
         )
         print(
             f"    detalhe remoção: "
-            f"preço<={LIMITE_PRECO}: {int(mascara_preco.sum())} | "
-            f"qtd<={LIMITE_QUANTIDADE}: {int(mascara_qtd.sum())} | "
-            f"ambos: {int((mascara_preco & mascara_qtd).sum())}"
+            f"preço<={LIMITE_PRECO}: {qtd_preco} | "
+            f"qtd<={LIMITE_QUANTIDADE}: {qtd_qtd} | "
+            f"ambos: {qtd_ambos}"
         )
 
-    return saidas
+    estatisticas = {
+        "total_linhas": total_linhas,
+        "total_removidas": total_removidas,
+        "total_por_preco": total_por_preco,
+        "total_por_quantidade": total_por_quantidade,
+        "total_por_ambos": total_por_ambos,
+        "total_limpas": total_limpas,
+    }
+
+    return saidas, estatisticas
 
 
 def _escrever_dataframe(worksheet, df: pd.DataFrame, workbook, nome_aba: str = "") -> None:
@@ -211,22 +249,27 @@ def main() -> None:
     abas = pd.read_excel(entrada, sheet_name=None)
     print(f"Abas encontradas: {list(abas.keys())}")
 
-    saidas = separar_por_aba(abas)
+    saidas, estatisticas = separar_por_aba(abas)
 
-    total_removidas = sum(
-        len(df) for nome, df in saidas.items()
-        if nome.startswith(PREFIXO_REMOVIDAS)
+    print("\n===== RESUMO CONSOLIDADO =====")
+    print(f"Total de linhas lidas:              {estatisticas['total_linhas']}")
+    print(f"Total de linhas removidas:          {estatisticas['total_removidas']}")
+    print(
+        f"  - atenderam ao 1º critério "
+        f"(preço <= {LIMITE_PRECO}):        {estatisticas['total_por_preco']}"
     )
-    total_limpas = sum(
-        len(df) for nome, df in saidas.items()
-        if nome.startswith(PREFIXO_LIMPAS)
+    print(
+        f"  - atenderam ao 2º critério "
+        f"(qtd <= {LIMITE_QUANTIDADE}):          {estatisticas['total_por_quantidade']}"
     )
+    print(
+        f"  - atenderam a AMBOS os critérios:  {estatisticas['total_por_ambos']}"
+    )
+    print(f"Total de linhas limpas:             {estatisticas['total_limpas']}")
+    print(f"Total de abas de saída:             {len(saidas)}")
+    print("==============================\n")
 
-    print(f"\nTotal de linhas removidas: {total_removidas}")
-    print(f"Total de linhas limpas:    {total_limpas}")
-    print(f"Total de abas de saída:    {len(saidas)}")
-
-    print(f"\nGravando arquivo de saída: {saida}")
+    print(f"Gravando arquivo de saída: {saida}")
     # XlsxWriter direto + constant_memory: grava em disco conforme gera.
     workbook = xlsxwriter.Workbook(saida, {"constant_memory": True})
     try:
