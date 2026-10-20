@@ -9,8 +9,9 @@ com uma linha por cliente, contendo:
     M — Monetary  : valor total gasto pelo cliente no período
 
 Premissas (ajustáveis nas constantes abaixo):
-    - Entrada em Excel (.xlsx) já tratada: online_retail_II_limpo.xlsx
-    - TODAS as abas do arquivo são lidas e concatenadas antes do cálculo
+    - Entrada em Excel (.xlsx) já tratada: online_retail_II_limpo2.xlsx
+    - Apenas as abas listadas em ABAS_INCLUIDAS são lidas e concatenadas
+      antes do cálculo (as demais abas do arquivo são ignoradas)
     - Colunas: Customer ID, Invoice, InvoiceDate, Quantity, Price
     - O valor de cada linha é calculado como Quantity * Price
     - Os últimos DIAS_IGNORADOS dias (contados a partir da data mais recente
@@ -35,6 +36,10 @@ import pandas as pd
 ARQUIVO_ENTRADA = "online_retail_II_limpo2.xlsx"
 ARQUIVO_SAIDA = "rfm2.xlsx"
 NOME_ABA_SAIDA = "RFM"
+
+# Abas do arquivo de entrada que devem ser consideradas no cálculo do RFM.
+# As demais abas são ignoradas.
+ABAS_INCLUIDAS = ["limpas_Year 2009-2010", "limpas_Year 2010-2011"]
 
 COL_CLIENTE = "Customer ID"
 COL_FATURA = "Invoice"
@@ -89,10 +94,19 @@ def carregar_vendas(caminho: str | Path) -> pd.DataFrame:
     if not abas:
         raise ValueError("O arquivo de entrada não possui abas para leitura.")
 
+    # Filtra apenas as abas desejadas
+    abas_faltantes = [a for a in ABAS_INCLUIDAS if a not in abas]
+    if abas_faltantes:
+        raise ValueError(
+            f"Abas obrigatórias ausentes no arquivo de entrada: {abas_faltantes}. "
+            f"Abas disponíveis: {list(abas.keys())}"
+        )
+
     colunas_obrigatorias = [COL_CLIENTE, COL_FATURA, COL_DATA, COL_QUANTIDADE, COL_PRECO]
 
     frames = []
-    for nome_aba, df_aba in abas.items():
+    for nome_aba in ABAS_INCLUIDAS:
+        df_aba = abas[nome_aba]
         _validar_colunas(df_aba, colunas_obrigatorias, nome_aba)
         _validar_coluna_numerica(df_aba, COL_QUANTIDADE, nome_aba)
         _validar_coluna_numerica(df_aba, COL_PRECO, nome_aba)
@@ -207,6 +221,7 @@ def main() -> None:
     rfm = calcular_rfm(df, data_referencia=DATA_REFERENCIA or data_corte)
     salvar_rfm(rfm, ARQUIVO_SAIDA, NOME_ABA_SAIDA)
 
+    print(f"Abas consideradas: {ABAS_INCLUIDAS}")
     print(f"Data máxima da base: {data_max.date()}")
     print(f"Corte (ignorando {DIAS_IGNORADOS} dias): {data_corte.date()}")
     print(f"RFM gerado com {len(rfm)} clientes -> {ARQUIVO_SAIDA} (aba '{NOME_ABA_SAIDA}')")
