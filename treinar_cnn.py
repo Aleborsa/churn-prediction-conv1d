@@ -20,9 +20,18 @@ Boas práticas aplicadas:
   avaliado no final.
 - Formato (amostras, 3, 1) com kernel_size=2: a convolução desliza
   sobre R -> F -> M, justificando o uso de uma CNN.
-- Métricas académicas (Precision, Recall, F1) via classification_report.
+- Métricas académicas (ROC-AUC, PR-AUC, Precision, Recall, F1) via
+  classification_report e roc_auc_score/average_precision_score.
 - Baselines (Random Forest e Regressão Logística) treinados em paralelo
   como "termómetros" para comparação na tabela de resultados do artigo.
+- Limiar de decisão da CNN otimizado na validação (maximiza F1) e
+  aplicado no teste, em vez do corte fixo de 0.5.
+
+Nota sobre o log1p no Monetary (teste A/B sugerido pelo avaliador):
+- Execute uma vez com a linha `df["Monetary"] = np.log1p(df["Monetary"])`
+  ativa, anote o ROC-AUC.
+- Comente essa linha, execute novamente e compare. A versão com melhor
+  ROC-AUC é a que deve ir para o artigo.
 """
 
 from __future__ import annotations
@@ -34,7 +43,13 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import (
+    average_precision_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras import callbacks, layers, models
@@ -50,6 +65,8 @@ def carregar_dados(caminho: str | Path) -> tuple[np.ndarray, np.ndarray]:
     Lê o rfm.xlsx e devolve (X, y) como arrays NumPy.
 
     Aplica log1p no Monetary para atenuar outliers antes da normalização.
+    Para o teste A/B do avaliador, comente a linha do log1p e compare o
+    ROC-AUC entre as duas execuções.
     """
     df = pd.read_excel(caminho, sheet_name=NOME_ABA_SAIDA)
 
@@ -139,9 +156,23 @@ def construir_cnn(n_passos: int) -> models.Sequential:
     return modelo
 
 
-def avaliar_modelo(nome: str, y_true: np.ndarray, y_pred: np.ndarray) -> None:
-    """Imprime matriz de confusão e classification report de um modelo."""
+def avaliar_modelo(
+    nome: str, y_true: np.ndarray, y_prob: np.ndarray, limiar: float = 0.5
+) -> None:
+    """
+    Imprime ROC-AUC, PR-AUC, matriz de confusão e classification report.
+
+    Recebe as probabilidades contínuas (y_prob) e aplica o limiar para
+    gerar as predições binárias. ROC-AUC e PR-AUC são calculados sobre
+    as probabilidades, independentemente do limiar.
+    """
+    y_pred = (y_prob >= limiar).astype(int)
+
+    roc_auc = roc_auc_score(y_true, y_prob)
+    pr_auc = average_precision_score(y_true, y_prob)
+
     print(f"\n===== {nome} =====")
+    print(f"ROC-AUC: {roc_auc:.4f} | PR-AUC: {pr_auc:.4f} | Limiar: {limiar:.2f}")
     print("Matriz de Confusão:")
     print(confusion_matrix(y_true, y_pred))
     print("Classification Report:")
@@ -163,14 +194,33 @@ def treinar_baselines(
 
     Servem de "termómetro" para comparar com a CNN na tabela do artigo.
     Usam os dados normalizados 2D (sem reshape), pois não são convolucionais.
+    Enviam as probabilidades (predict_proba[:, 1]) para avaliar_modelo.
     """
     rf = RandomForestClassifier(n_estimators=200, random_state=42)
     rf.fit(X_train, y_train)
-    avaliar_modelo("Random Forest (baseline)", y_test, rf.predict(X_test))
+    rf_prob = rf.predict_proba(X_test)[:, 1]
+    avaliar_modelo("Random Forest (baseline)", y_test, rf_prob)
 
     lr = LogisticRegression(max_iter=1000, random_state=42)
     lr.fit(X_train, y_train)
-    avaliar_modelo("Regressão Logística (baseline)", y_test, lr.predict(X_test))
+    lr_prob = lr.predict_proba(X_test)[:, 1]
+    avaliar_modelo("Regressão Logística (baseline)", y_test, lr_prob)
+
+
+def otimizar_limiar(y_true: np.ndarray, y_prob: np.ndarray) -> tuple[float, float]:
+    """
+    Procura o limiar em [0.1, 0.9) (passo 0.05) que maximiza o F1-Score
+    no conjunto de validação. Devolve (melhor_limiar, melhor_f1).
+    """
+    melhor_limiar = 0.5
+    melhor_f1 = -1.0
+    for limiar in np.arange(0.1, 0.9, 0.05):
+        y_pred = (y_prob >= limiar).astype(int)
+        f1 = f1_score(y_true, y_pred, zero_division=0)
+        if f1 > melhor_f1:
+            melhor_f1 = f1
+            melhor_limiar = float(limiar)
+    return melhor_limiar, melhor_f1
 
 
 def main() -> None:
@@ -221,14 +271,21 @@ def main() -> None:
         verbose=1,
     )
 
+    # Otimização do limiar na validação (maximiza F1)
+    y_val_prob = modelo.predict(X_val_3d, verbose=0).ravel()
+    limiar_otimo, f1_val = otimizar_limiar(y_val, y_val_prob)
+    print(
+        f"\nLimiar ótimo (validação): {limiar_otimo:.2f} "
+        f"(F1 validação = {f1_val:.4f})"
+    )
+
     # Avaliação final no conjunto de teste (nunca visto durante o treino)
     loss, acc = modelo.evaluate(X_test_3d, y_test, verbose=0)
     print(f"\nAcurácia no teste (CNN): {acc:.4f} | Loss: {loss:.4f}")
 
-    # Métricas académicas da CNN
+    # Métricas académicas da CNN com o limiar ótimo
     y_prob = modelo.predict(X_test_3d, verbose=0).ravel()
-    y_pred = (y_prob >= 0.5).astype(int)
-    avaliar_modelo("CNN 1D", y_test, y_pred)
+    avaliar_modelo("CNN 1D", y_test, y_prob, limiar=limiar_otimo)
 
 
 if __name__ == "__main__":
