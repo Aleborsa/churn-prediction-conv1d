@@ -26,7 +26,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Configuração
 # ---------------------------------------------------------------------------
-ARQUIVO_ENTRADA = "vendas.xlsx"
+ARQUIVO_ENTRADA = "online_retail_II.xlsx"
 ARQUIVO_SAIDA = "rfm.xlsx"
 NOME_ABA_SAIDA = "RFM"
 
