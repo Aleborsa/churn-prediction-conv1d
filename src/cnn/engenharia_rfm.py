@@ -17,6 +17,8 @@ Premissas (ajustáveis nas constantes abaixo):
       da base) são DESCONSIDERADOS no cálculo do RFM
     - Data de referência = data máxima (após o corte) do dataset
     - Saída em Excel, uma aba "RFM"
+    - Ao final, executa automaticamente adicionar_compra_futura.py para
+      acrescentar a coluna binária de compra futura ao RFM
 """
 
 from __future__ import annotations
@@ -208,6 +210,20 @@ def main() -> None:
     print(f"Data máxima da base: {data_max.date()}")
     print(f"Corte (ignorando {DIAS_IGNORADOS} dias): {data_corte.date()}")
     print(f"RFM gerado com {len(rfm)} clientes -> {ARQUIVO_SAIDA} (aba '{NOME_ABA_SAIDA}')")
+
+    # Executa automaticamente a adição da coluna de compra futura.
+    # O import é feito aqui dentro (e não no topo) para evitar import
+    # circular, já que adicionar_compra_futura importa deste módulo.
+    print("\nExecutando adicionar_compra_futura.py...")
+    try:
+        from adicionar_compra_futura import main as adicionar_compra_futura_main
+
+        adicionar_compra_futura_main()
+    except Exception as e:
+        print(
+            f"[AVISO] Falha ao executar adicionar_compra_futura: {e}",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":
