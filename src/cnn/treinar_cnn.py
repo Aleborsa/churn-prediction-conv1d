@@ -53,13 +53,17 @@ COL_ALVO = f"Comprou_{DIAS_IGNORADOS}d"
 
 def configurar_logging() -> logging.Logger:
     """
-    Configura o logger para escrever em arquivo (pasta logs/) e na consola.
+    Configura o logger para escrever em arquivo (pasta logs/) e no console.
 
     O nome do arquivo inclui um timestamp para não sobrescrever execuções
     anteriores. Devolve o logger pronto a usar.
     """
-    logs_dir = Path("../../logs")
-    logs_dir.mkdir(exist_ok=True)
+    diretorio_script = Path(__file__).resolve().parent
+
+    # Volta dois níveis e adiciona a pasta logs
+    logs_dir = diretorio_script.parent.parent / "logs"
+
+    logs_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = logs_dir / f"treinar_cnn_{timestamp}.log"
