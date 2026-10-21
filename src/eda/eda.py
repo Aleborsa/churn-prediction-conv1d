@@ -1,12 +1,24 @@
 """
-Análise Exploratória de Dados (EDA) para um arquivo Excel com múltiplas abas
-(anos diferentes, mesmas colunas).
+Passo 0 - Análise Exploratória de Dados (EDA)
+
+Este script foi utilizado para a investigação inicial da base de dados bruta
+'Online Retail II' antes das etapas de limpeza e engenharia de atributos (RFM).
+
+Objetivos principais desta EDA no contexto do projeto:
+1. Analisar a estrutura e a volumetria dos registros distribuídos nas múltiplas abas
+   da planilha (anos 2009-2010 e 2010-2011).
+2. Mapear valores ausentes (NaN), com destaque para a ausência da coluna 'Customer ID',
+   o que inviabiliza o rastreio do comportamento de recompra desses registros.
+3. Identificar anomalias transacionais, como quantidades negativas (que representam
+   devoluções/cancelamentos) e preços unitários inconsistentes (zerados ou negativos).
+4. Fundamentar empiricamente as regras de negócio aplicadas no script subsequente de
+   higienização da base (limpar_precos.py).
 
 Uso:
-    python main.py
-    python main.py caminho/para/arquivo.xlsx
+    python src/eda/eda.py
+    python src/eda/eda.py caminho/para/online_retail_II.xlsx
 
-Ajuste ARQUIVO_EXCEL abaixo se preferir fixar o caminho.
+Ajuste a variável ARQUIVO_EXCEL abaixo se preferir fixar o caminho local da base.
 """
 
 import os
@@ -15,15 +27,18 @@ import io
 import contextlib
 
 import pandas as pd
+from pathlib import Path
+
+
+RAIZ_PROJETO = Path(__file__).resolve().parent.parent.parent
 
 # ---------------------------------------------------------------------------
 # Configuração
 # ---------------------------------------------------------------------------
-ARQUIVO_EXCEL = "online_retail_II_limpo.xlsx"   # <-- troque pelo caminho do seu arquivo
-ARQUIVO_RELATORIO = "relatorio_eda_limpo.txt"
-GERAR_GRAFICOS = False         # tenta gerar gráficos se matplotlib/seaborn existirem
-PASTA_GRAFICOS = "graficos_eda"
-
+ARQUIVO_EXCEL = str(RAIZ_PROJETO / "dados" / "online_retail_II.xlsx")
+ARQUIVO_RELATORIO = str(RAIZ_PROJETO / "dados" / "relatorio_eda.txt")
+GERAR_GRAFICOS = False
+PASTA_GRAFICOS = str(RAIZ_PROJETO / "dados" / "graficos_eda")
 
 # ---------------------------------------------------------------------------
 # Utilidades

@@ -1,25 +1,25 @@
 """
-Engenharia de atributos — RFM
------------------------------
+Passo 2 - Engenharia de Atributos (Matriz RFM)
+
 Transforma uma base de vendas (uma linha por item de fatura) em uma tabela
 com uma linha por cliente, contendo:
-
     R — Recency   : dias desde a última compra (menor = melhor)
     F — Frequency : nº de faturas distintas (Invoice) do cliente
     M — Monetary  : valor total gasto pelo cliente no período
 
-Premissas (ajustáveis nas constantes abaixo):
-    - Entrada em Excel (.xlsx) já tratada: online_retail_II_limpo2.xlsx
-    - Apenas as abas listadas em ABAS_INCLUIDAS são lidas e concatenadas
-      antes do cálculo (as demais abas do arquivo são ignoradas)
-    - Colunas: Customer ID, Invoice, InvoiceDate, Quantity, Price
-    - O valor de cada linha é calculado como Quantity * Price
-    - Os últimos DIAS_IGNORADOS dias (contados a partir da data mais recente
-      da base) são DESCONSIDERADOS no cálculo do RFM
-    - Data de referência = data máxima (após o corte) do dataset
-    - Saída em Excel, uma aba "RFM"
-    - Ao final, executa automaticamente adicionar_compra_futura.py para
-      acrescentar a coluna binária de compra futura ao RFM
+Premissas e Metodologia:
+- Entrada: Lê o arquivo 'online_retail_II_limpo.xlsx', processando
+  exclusivamente as abas listadas em ABAS_INCLUIDAS.
+- Regra de Corte (Anti-Leakage): Os últimos DIAS_IGNORADOS (ex: 90 dias)
+  da base são estritamente DESCONSIDERADOS no cálculo do RFM. A data de
+  referência passa a ser a data máxima após este corte.
+- Saída: Arquivo Excel contendo uma aba consolidada "RFM".
+- Pipeline Automatizado: Ao final, executa automaticamente o script
+  'adicionar_compra_futura.py' para apurar o gabarito (Target) na
+  janela ignorada e acrescentá-lo ao arquivo gerado.
+
+Uso:
+    python src/cnn/engenharia_rfm.py
 """
 
 from __future__ import annotations
@@ -31,10 +31,17 @@ import pandas as pd
 
 
 # ---------------------------------------------------------------------------
-# Configuração
+# Configuração de Caminhos (Resolução Automática)
 # ---------------------------------------------------------------------------
-ARQUIVO_ENTRADA = "online_retail_II_limpo2.xlsx"
-ARQUIVO_SAIDA = "rfm2.xlsx"
+RAIZ_PROJETO = Path(__file__).resolve().parent.parent.parent
+PASTA_DADOS = RAIZ_PROJETO / "dados"
+
+ARQUIVO_ENTRADA = str(PASTA_DADOS / "online_retail_II_limpo.xlsx")
+ARQUIVO_SAIDA = str(PASTA_DADOS / "rfm2.xlsx")
+
+# ---------------------------------------------------------------------------
+# Parâmetros de Negócio
+# ---------------------------------------------------------------------------
 NOME_ABA_SAIDA = "RFM"
 
 # Abas do arquivo de entrada que devem ser consideradas no cálculo do RFM.

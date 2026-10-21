@@ -1,13 +1,17 @@
 """
-Adiciona coluna binária ao RFM indicando se o cliente comprou nos
-DIAS_IGNORADOS dias futuros (período ignorado no cálculo do RFM).
+Passo 2.1 - Construção da Variável-Alvo (Target)
 
-Deve ser executado APÓS engenharia_rfm.py, pois lê o arquivo rfm.xlsx
-gerado por ele e adiciona a coluna.
+Adiciona uma coluna binária à matriz RFM indicando se o cliente realizou
+novas compras durante a janela temporal isolada no cálculo base (ex: últimos 90 dias).
 
-    Comprou_90d = 1  -> cliente fez ao menos uma compra no período
-                        (corte, data_max] (os DIAS_IGNORADOS dias ignorados)
-    Comprou_90d = 0  -> cliente não comprou nesse período
+Este script complementa o 'engenharia_rfm.py'. Ele cruza os clientes da base RFM
+com as transações ocorridas no período de validação futuro, estabelecendo o
+gabarito (ground truth) supervisionado para a rede neural:
+    1 -> Cliente recomprou no período futuro (corte, data_max]
+    0 -> Cliente não recomprou no período futuro (abandono/churn)
+
+Uso:
+    python src/cnn/adicionar_compra_futura.py
 """
 
 from __future__ import annotations

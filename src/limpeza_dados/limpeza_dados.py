@@ -1,49 +1,42 @@
 """
-Remove linhas com preço inválido (<= 0.01), quantidade inválida (<= 0),
-Customer ID vazio ou StockCode em uma lista de códigos inválidos de um
-arquivo Excel com múltiplas abas (anos diferentes, mesmas colunas) e
-gera um novo Excel mantendo as abas separadas por ano.
+Passo 1 - Limpeza e Higienização de Dados
 
-Para cada aba de origem, são geradas 2 abas de saída:
-    - "limpas_<aba>":    apenas as linhas válidas
-                         (Price > 0.01 E Quantity > 0 E Customer ID preenchido
-                          E StockCode fora da lista de inválidos)
-    - "removidas_<aba>": apenas as linhas descartadas
-                         (Price <= 0.01 OU Quantity <= 0 OU Customer ID vazio
-                          OU StockCode na lista de inválidos)
+Remove linhas com anomalias de faturamento (Price <= 0.01), devoluções ou
+cancelamentos (Quantity <= 0), registros não identificados (Customer ID vazio)
+ou itens operacionais sem valor comercial (StockCode em lista de exclusão).
 
-Ex.: com 2 abas de entrada -> 4 abas de saída.
-
-A escrita usa o XlsxWriter diretamente (worksheet.write_*) em modo
-"constant_memory", que grava as linhas em disco conforme são geradas.
-Isso evita o overhead do pandas.to_excel e mantém o uso de memória baixo
-mesmo com 1M+ linhas.
-
-Dependência:
-    pip install XlsxWriter
+O processamento ocorre em um arquivo Excel com múltiplas abas (anos diferentes),
+gerando um novo arquivo particionado: abas "limpas_" para uso no cálculo do RFM
+e abas "removidas_" para auditoria e prestação de contas dos dados filtrados.
 
 Uso:
-    python limpar_precos.py
-    python limpar_precos.py caminho/para/arquivo.xlsx
-    python limpar_precos.py entrada.xlsx saida.xlsx
+    python src/limpeza_dados/limpar_precos.py
 """
 
 import os
 import re
 import sys
+from pathlib import Path
 
 import pandas as pd
 import xlsxwriter
 
 # ---------------------------------------------------------------------------
-# Configuração
+# Configuração de Caminhos
 # ---------------------------------------------------------------------------
-ARQUIVO_ENTRADA = "online_retail_II.xlsx"
-ARQUIVO_SAIDA = "online_retail_II_limpo.xlsx"
-COLUNA_PRECO = "Price"          # nome da coluna de preço
-LIMITE_PRECO = 0.01             # remove linhas com preço <= este valor
-COLUNA_QUANTIDADE = "Quantity"  # nome da coluna de quantidade
-LIMITE_QUANTIDADE = 0           # remove linhas com quantidade <= este valor
+RAIZ_PROJETO = Path(__file__).resolve().parent.parent.parent
+PASTA_DADOS = RAIZ_PROJETO / "dados"
+
+ARQUIVO_ENTRADA = str(PASTA_DADOS / "online_retail_II.xlsx")
+ARQUIVO_SAIDA = str(PASTA_DADOS / "online_retail_II_limpo.xlsx")
+
+# ---------------------------------------------------------------------------
+# Parâmetros de Limpeza
+# ---------------------------------------------------------------------------
+COLUNA_PRECO = "Price"              # nome da coluna de preço
+LIMITE_PRECO = 0.01                 # remove linhas com preço <= este valor
+COLUNA_QUANTIDADE = "Quantity"      # nome da coluna de quantidade
+LIMITE_QUANTIDADE = 0               # remove linhas com quantidade <= este valor
 COLUNA_CUSTOMER_ID = "Customer ID"  # nome da coluna de cliente
 COLUNA_STOCK_CODE = "StockCode"     # nome da coluna de código de estoque
 PREFIXO_REMOVIDAS = "removidas"

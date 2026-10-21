@@ -13,12 +13,6 @@ Boas práticas aplicadas:
 - Semente de aleatoriedade travada para favorecer a reprodutibilidade.
 - Logging em arquivo (pasta logs/) e na consola, em vez de print().
 
-Nota sobre o log1p no Monetary:
-- Compare as versões com e sem log1p usando o mesmo split.
-- Escolha a transformação com base no desempenho na validação,
-  considerando ROC-AUC e AP.
-- Depois de selecionar a configuração, avalie-a no conjunto
-  de teste reservado, sem usá-lo para novas decisões.
 """
 
 from __future__ import annotations
@@ -64,7 +58,7 @@ def configurar_logging() -> logging.Logger:
     O nome do arquivo inclui um timestamp para não sobrescrever execuções
     anteriores. Devolve o logger pronto a usar.
     """
-    logs_dir = Path("../logs")
+    logs_dir = Path("../../logs")
     logs_dir.mkdir(exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
