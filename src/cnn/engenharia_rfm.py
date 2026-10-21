@@ -37,7 +37,7 @@ RAIZ_PROJETO = Path(__file__).resolve().parent.parent.parent
 PASTA_DADOS = RAIZ_PROJETO / "dados"
 
 ARQUIVO_ENTRADA = str(PASTA_DADOS / "online_retail_II_limpo.xlsx")
-ARQUIVO_SAIDA = str(PASTA_DADOS / "rfm2.xlsx")
+ARQUIVO_SAIDA = str(PASTA_DADOS / "rfm.xlsx")
 
 # ---------------------------------------------------------------------------
 # Parâmetros de Negócio
